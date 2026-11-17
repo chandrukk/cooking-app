@@ -202,3 +202,46 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
   .cards:not(.compact) { grid-template-columns: 1fr 1fr; }
   .cook-text { font-size: 28px; }
 }
+
+/* ---------- filters, resume ---------- */
+.filters { display: flex; gap: 8px; overflow-x: auto; margin: 14px -16px 0; padding: 2px 16px 4px; scrollbar-width: none; }
+.filters::-webkit-scrollbar { display: none; }
+.filter { flex: none; border: 1.5px solid var(--line); background: var(--surface); border-radius: 999px; padding: 8px 14px; font-size: 15px; font-weight: 600; color: var(--muted); }
+.filter.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.resume { display: flex; align-items: center; gap: 6px; background: var(--accent-soft); border: 1.5px solid var(--accent); border-radius: var(--radius); padding: 6px 6px 6px 16px; margin-bottom: 14px; }
+.resume-link { flex: 1; min-width: 0; display: grid; padding: 6px 0; }
+.resume-label { font-weight: 700; color: var(--accent); }
+.resume-what { font-size: 15px; }
+.btn.small { padding: 8px 14px; font-size: 15px; margin-top: 10px; }
+
+/* ---------- adjust on recipe page ---------- */
+.adjust { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: -4px 0 16px; }
+.seg.small { flex: 1 1 220px; max-width: 320px; }
+.seg.small button { padding: 9px 0; font-size: 15px; }
+.stepper.small { gap: 10px; }
+.stepper.small .iconbtn.round { width: 42px; height: 42px; }
+.stepper.small .serves { min-width: 88px; font-size: 16px; }
+.stepper.small .serves b { font-size: 20px; }
+
+/* ---------- cook actions, ingredients sheet ---------- */
+.cook-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+.cook-actions .read { margin-top: 0; }
+.cook-actions .btn { padding: 13px 18px; }
+.sheet { position: fixed; inset: 0; z-index: 20; background: rgba(20, 12, 6, .45); display: flex; align-items: flex-end; justify-content: center; }
+.sheet[hidden] { display: none; }
+.sheet-panel { background: var(--bg); width: 100%; max-width: 640px; max-height: 85vh; overflow-y: auto; border-radius: 18px 18px 0 0; padding: 16px 16px calc(24px + env(safe-area-inset-bottom)); }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; }
+.sheet-head h2 { font-size: 20px; }
+.sheet .group:first-of-type { margin-top: 10px; }
+
+/* ---------- timers ---------- */
+.timers { position: fixed; left: 0; right: 0; bottom: calc(84px + env(safe-area-inset-bottom)); z-index: 6; display: grid; gap: 6px; padding: 0 16px; pointer-events: none; }
+.timer { pointer-events: auto; max-width: 608px; width: 100%; margin: 0 auto; display: flex; align-items: center; gap: 8px; background: var(--text); color: var(--bg); border-radius: 12px; padding: 8px 8px 8px 12px; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+.timer svg { width: 20px; height: 20px; }
+.timer-label { flex: 1; min-width: 0; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .85; }
+.timer-time { font-weight: 700; font-variant-numeric: tabular-nums; font-size: 18px; }
+.timer-btn { border: 0; background: transparent; color: inherit; min-width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; font-weight: 700; }
+.timer.done { background: var(--accent); color: var(--accent-text); animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { transform: scale(1.02); } }
+@media (prefers-reduced-motion: reduce) { .timer.done { animation: none; } }
+body.has-timers .wrap { padding-bottom: calc(170px + env(safe-area-inset-bottom)); }

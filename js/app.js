@@ -29,6 +29,8 @@
     },
   };
   const findDish = (id) => RECIPES.find((d) => d.id === id);
+  const sessionGet = (k) => { try { return sessionStorage.getItem(k); } catch (e) { return null; } };
+  const sessionSet = (k, v) => { try { sessionStorage.setItem(k, v); } catch (e) { /* ignore */ } };
 
   // ---------- quantities ----------
 
@@ -65,7 +67,7 @@
   }
 
   // Counted produce (onions, tomatoes, potatoes...) may be halved; spices, eggs and chillies may not.
-  const HALVABLE = /onion|tomato|potato|carrot|bell pepper|eggplant|drumstick/i;
+  const HALVABLE = /onion|tomato|potato|carrot|bell pepper|eggplant|drumstick|cauliflower/i;
 
   function scaleAmount(ing, ctx) {
     let q = ing.q;
@@ -115,7 +117,7 @@
       if (!forMethod(ing)) return;
       const a = scaleAmount(ing, ctx);
       if (!a) return;
-      const row = { ...ing, a, text: ingText(ing, a) };
+      const row = { ...ing, s: ing.s || 'Ingredients', a, text: ingText(ing, a) };
       ings.push(row);
       byKey[ing.k] = row;
     });
@@ -304,6 +306,7 @@
     search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>',
     minus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg>',
     plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12M12 6v12"/></svg>',
+    list: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><circle cx="4.5" cy="6.5" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="17.5" r="1"/></svg>',
     check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   };
 
@@ -315,7 +318,7 @@
     if (r.view !== 'cook') keepAwake(false);
     const dish = r.dishId && findDish(r.dishId);
     if (r.view === 'home' || !dish) return renderHome();
-    if (r.view === 'setup') return renderSetup(dish);
+    if (r.view === 'setup') return renderSetup(dish, r.params.get('style'));
     const style = dish.styles.find((s) => s.id === r.styleId) || dish.styles[0];
     const opts = optsFrom(r.params, dish, style);
     const recipe = build(dish, style, opts);
@@ -329,26 +332,46 @@
     window.scrollTo(0, 0);
   }
 
-  // Home: search + dish list
+  // Home: resume banner, search, cuisine filter, dish list
+  const CUISINES = ['All', 'South Indian', 'North Indian', 'Starters', 'Breakfast & sides', 'Chinese-style'];
   function renderHome() {
-    const q = sessionStorage.getItem('q') || '';
+    const q = sessionGet('q') || '';
+    let cuisine = sessionGet('cuisine') || 'All';
+    const resume = store.get('resume', null);
+    const fresh = resume && Date.now() - resume.at < 12 * 3600 * 1000;
     setPage(`
       <header class="home-head">
         <h1>Kitchen Steps</h1>
         <p class="sub">Exact recipes, one step at a time.</p>
       </header>
+      ${fresh ? `
+      <div class="resume">
+        <a class="resume-link" href="${esc(resume.hash)}">
+          <span class="resume-label">Continue cooking</span>
+          <span class="resume-what">${esc(resume.dish)} · step ${resume.step + 1} of ${resume.total}</span>
+        </a>
+        <button class="iconbtn ghost" id="resume-x" aria-label="Dismiss">${ICON.close}</button>
+      </div>` : ''}
       <label class="search">
         ${ICON.search}
         <input id="q" type="search" placeholder="What do you want to cook?" autocomplete="off" value="${esc(q)}" aria-label="Search dishes">
       </label>
+      <div class="filters" id="filters" role="group" aria-label="Filter dishes"></div>
       <div id="results"></div>
       <div id="requests"></div>
     `);
     const input = document.getElementById('q');
+    const drawFilters = () => {
+      const counts = (c) => (c === 'All' ? RECIPES.length : RECIPES.filter((d) => (d.cuisine || []).includes(c)).length);
+      document.getElementById('filters').innerHTML = input.value.trim() ? '' : CUISINES.filter((c) => counts(c)).map((c) =>
+        `<button class="filter ${c === cuisine ? 'on' : ''}" data-cuisine="${esc(c)}" aria-pressed="${c === cuisine}">${esc(c)}</button>`).join('');
+    };
     const draw = () => {
       const val = input.value.trim();
-      try { sessionStorage.setItem('q', input.value); } catch (e) { /* ignore */ }
-      const res = search(val);
+      sessionSet('q', input.value);
+      let res = search(val);
+      if (!val && cuisine !== 'All') res = res.filter((r) => (r.d.cuisine || []).includes(cuisine));
+      if (!val) res.sort((a, b) => a.d.name.localeCompare(b.d.name));
       const strong = res.filter((r) => r.score >= 0.75);
       let html = '';
       if (val && !res.length) {
@@ -356,25 +379,42 @@
           <button class="btn secondary" data-request="${esc(val)}">Ask for it to be added</button></div>`;
       } else {
         if (val && !strong.length) html += `<p class="hint">No exact match for “${esc(val)}”. Closest dishes:</p>`;
+        const qWords = norm(val).split(' ').filter(Boolean);
+        const styleFor = (d) => {
+          if (!qWords.length) return '';
+          const st = d.styles.find((s) => { const w = norm(s.name).split(' '); return qWords.filter((q) => w.some((x) => x.startsWith(q))).length >= Math.min(2, qWords.length) && d.styles.length > 1; });
+          return st ? '?style=' + st.id : '';
+        };
         html += '<ul class="dishes">' + res.map(({ d }) => `
-          <li><a class="dish" href="#/d/${d.id}">
+          <li><a class="dish" href="#/d/${d.id}${styleFor(d)}">
             <span class="dish-name">${esc(d.name)}</span>
             <span class="dish-blurb">${esc(d.blurb)}</span>
             <span class="dish-styles">${d.styles.map((s) => esc(s.name)).join(' · ')}</span>
           </a></li>`).join('') + '</ul>';
         if (val && !strong.length) html += `<p class="hint">Not what you want? <button class="linkbtn" data-request="${esc(val)}">Ask for “${esc(val)}” to be added</button></p>`;
       }
+      drawFilters();
       document.getElementById('results').innerHTML = html;
     };
     const drawRequests = () => {
       const list = store.get('requests', []);
       document.getElementById('requests').innerHTML = list.length
-        ? `<section class="requests"><h2>Dishes you asked for</h2><p class="hint">Saved on this device. Share this list to get them added.</p><ul>${list.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></section>`
+        ? `<section class="requests"><h2>Dishes you asked for</h2><p class="hint">Saved on this device. Copy the list and send it to get them added.</p><ul>${list.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+           <button class="btn secondary small" id="copy-req">Copy list</button></section>`
         : '';
     };
     input.addEventListener('input', draw);
-    app.addEventListener('click', onRequestClick);
-    function onRequestClick(e) {
+    app.onclick = (e) => {
+      const f = e.target.closest('[data-cuisine]');
+      if (f) { cuisine = f.dataset.cuisine; sessionSet('cuisine', cuisine); draw(); return; }
+      if (e.target.closest('#resume-x')) { store.set('resume', null); const r = document.querySelector('.resume'); if (r) r.remove(); return; }
+      if (e.target.closest('#copy-req')) {
+        const btn = e.target.closest('#copy-req');
+        const text = 'Dishes to add to Kitchen Steps: ' + store.get('requests', []).join(', ');
+        const done = () => { btn.textContent = 'Copied'; };
+        try { navigator.clipboard.writeText(text).then(done, () => { window.prompt('Copy this:', text); }); } catch (err) { /* ignore */ }
+        return;
+      }
       const b = e.target.closest('[data-request]');
       if (!b) return;
       const name = b.getAttribute('data-request');
@@ -383,16 +423,15 @@
       store.set('requests', list);
       b.outerHTML = '<span class="noted">' + ICON.check + ' Noted</span>';
       drawRequests();
-    }
-    // remove the listener when leaving home
-    window.addEventListener('hashchange', () => app.removeEventListener('click', onRequestClick), { once: true });
+    };
     draw();
     drawRequests();
   }
 
   // Setup: style, spice, servings, method
-  function renderSetup(dish) {
+  function renderSetup(dish, wantStyle) {
     const saved = store.get('opts:' + dish.id, {});
+    if (wantStyle && dish.styles.some((s) => s.id === wantStyle)) saved.style = wantStyle;
     const state = {
       style: dish.styles.find((s) => s.id === saved.style) ? saved.style : dish.styles[0].id,
       spice: saved.spice || 'medium',
@@ -434,7 +473,7 @@
         </section>
         ${style.methods ? `
         <section class="q">
-          <h2>${dish.id === 'chicken-tikka-masala' ? 'How will you cook the tikka?' : dish.id === 'sambar' ? 'How will you cook the dal?' : 'How will you cook the mutton?'}</h2>
+          <h2>${esc(dish.methodQ || 'How will you cook it?')}</h2>
           <div class="cards compact">
             ${style.methods.map((m) => `
               <button class="card ${m.id === state.method ? 'on' : ''}" data-method="${m.id}" aria-pressed="${m.id === state.method}">
@@ -469,8 +508,7 @@
   }
 
   function summaryLine(rc) {
-    const spice = SPICES.find((s) => s.id === rc.opts.spice).name;
-    return [rc.style.name, spice, rc.opts.serves + (rc.opts.serves === 1 ? ' person' : ' people'), rc.method && rc.method.name].filter(Boolean).map(esc).join(' · ');
+    return [rc.style.name, rc.method && rc.method.name].filter(Boolean).map(esc).join(' · ');
   }
 
   // Recipe overview: "before you start" checklist and full recipe
@@ -521,6 +559,16 @@
           <p class="sub">${summaryLine(rc)}</p>
         </div>
       </header>
+      <div class="adjust">
+        <div class="seg small" role="group" aria-label="Spice level">
+          ${SPICES.map((sp) => `<button class="${sp.id === rc.opts.spice ? 'on' : ''}" data-adj-spice="${sp.id}" aria-pressed="${sp.id === rc.opts.spice}">${sp.name}</button>`).join('')}
+        </div>
+        <div class="stepper small">
+          <button class="iconbtn round" data-adj-serves="-1" aria-label="Fewer people" ${rc.opts.serves <= 1 ? 'disabled' : ''}>${ICON.minus}</button>
+          <span class="serves"><b>${rc.opts.serves}</b> ${rc.opts.serves === 1 ? 'person' : 'people'}</span>
+          <button class="iconbtn round" data-adj-serves="1" aria-label="More people" ${rc.opts.serves >= 8 ? 'disabled' : ''}>${ICON.plus}</button>
+        </div>
+      </div>
       <nav class="tabs" role="tablist">
         <a role="tab" href="${base}&tab=start" class="${tab !== 'full' ? 'on' : ''}" aria-selected="${tab !== 'full'}">Before you start</a>
         <a role="tab" href="${base}&tab=full" class="${tab === 'full' ? 'on' : ''}" aria-selected="${tab === 'full'}">Full recipe</a>
@@ -531,6 +579,18 @@
       </div>
     `, rc.dish.name);
 
+    app.onclick = (e) => {
+      const b = e.target.closest('button');
+      if (!b || !(b.dataset.adjSpice || b.dataset.adjServes)) return;
+      const o = { ...rc.opts };
+      if (b.dataset.adjSpice) o.spice = b.dataset.adjSpice;
+      else o.serves = Math.min(8, Math.max(1, o.serves + parseInt(b.dataset.adjServes, 10)));
+      store.set('opts:' + rc.dish.id, { ...store.get('opts:' + rc.dish.id, {}), ...o, style: rc.style.id });
+      const y = window.scrollY;
+      history.replaceState(null, '', `#/r/${rc.dish.id}/${rc.style.id}?${qsFor(o, { tab })}`);
+      render();
+      window.scrollTo(0, y);
+    };
     app.onchange = (e) => {
       const k = e.target.getAttribute('data-tick');
       if (!k) return;
@@ -547,6 +607,94 @@
     return `<ul class="mini">${items.map((i) => `<li>${esc(i.text)}${i.note ? `<span class="muted">, ${esc(i.note)}</span>` : ''}</li>`).join('')}</ul>`;
   }
 
+  // ---------- step timers ----------
+  // Timers keep their end time in storage, so they survive moving between steps or reloading.
+
+  function parseMinutes(text) {
+    if (!text) return 0;
+    const m = String(text).match(/(\d+)(?:\s*[–-]\s*\d+)?\s*(min|hour|hr|second)/i);
+    if (!m) return 0;
+    const n = parseInt(m[1], 10);
+    const unit = m[2].toLowerCase();
+    if (unit.startsWith('second')) return n >= 60 ? n / 60 : 0;
+    if (unit === 'hour' || unit === 'hr') return n * 60;
+    return n;
+  }
+
+  const timers = {
+    list: store.get('timers', []),
+    tick: null,
+    save() { store.set('timers', this.list); },
+    add(label, minutes) {
+      this.list.push({ id: Date.now(), label, end: Date.now() + minutes * 60000, mins: minutes, done: false });
+      this.save();
+      sound.prime();
+      this.draw();
+    },
+    remove(id) { this.list = this.list.filter((t) => t.id !== id); this.save(); this.draw(); },
+    addMinute(id) {
+      const t = this.list.find((x) => x.id === id);
+      if (!t) return;
+      t.end = Math.max(t.end, Date.now()) + 60000; t.done = false; this.save(); this.draw();
+    },
+    draw() {
+      const el = document.getElementById('timers');
+      if (!el) return;
+      const now = Date.now();
+      let ringing = false;
+      el.innerHTML = this.list.map((t) => {
+        const left = Math.max(0, Math.round((t.end - now) / 1000));
+        if (left === 0 && !t.done) { t.done = true; this.save(); this.ring(t); }
+        if (t.done) ringing = true;
+        const mm = Math.floor(left / 60), ss = String(left % 60).padStart(2, '0');
+        return `<div class="timer ${t.done ? 'done' : ''}">
+          ${ICON.clock}
+          <span class="timer-label">${esc(t.label)}</span>
+          <span class="timer-time">${t.done ? 'Done' : mm + ':' + ss}</span>
+          <button class="timer-btn" data-timer-plus="${t.id}" aria-label="Add 1 minute">+1</button>
+          <button class="timer-btn" data-timer-x="${t.id}" aria-label="${t.done ? 'Dismiss' : 'Cancel'} timer">${ICON.close}</button>
+        </div>`;
+      }).join('');
+      document.body.classList.toggle('has-timers', this.list.length > 0);
+      el.classList.toggle('ringing', ringing);
+      if (this.list.length && !this.tick) this.tick = setInterval(() => this.draw(), 1000);
+      if (!this.list.length && this.tick) { clearInterval(this.tick); this.tick = null; }
+    },
+    ring(t) {
+      sound.beep();
+      try { if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]); } catch (e) { /* ignore */ }
+      voice.speak('Timer done. ' + t.label);
+    },
+  };
+
+  // A short beep made in the browser (no sound files needed)
+  const sound = {
+    ctx: null,
+    prime() {
+      try {
+        if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        if (this.ctx.state === 'suspended') this.ctx.resume();
+      } catch (e) { /* no audio */ }
+    },
+    beep() {
+      if (!this.ctx) return;
+      [0, 0.5, 1].forEach((t) => {
+        const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+        o.frequency.value = 880; o.connect(g); g.connect(this.ctx.destination);
+        const at = this.ctx.currentTime + t;
+        g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(0.4, at + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.35);
+        o.start(at); o.stop(at + 0.4);
+      });
+    },
+  };
+
+  document.getElementById('timers').addEventListener('click', (e) => {
+    const plus = e.target.closest('[data-timer-plus]');
+    const x = e.target.closest('[data-timer-x]');
+    if (plus) timers.addMinute(Number(plus.dataset.timerPlus));
+    if (x) { voice.stop(); timers.remove(Number(x.dataset.timerX)); }
+  });
+
   // Cook mode: one step at a time
   function renderCook(rc, idx) {
     const total = rc.steps.length;
@@ -555,13 +703,17 @@
     const last = idx === total - 1;
     const pct = Math.round(((idx + 1) / total) * 100);
     const recipeHref = `#/r/${rc.dish.id}/${rc.style.id}?${qsFor(rc.opts)}`;
+    const mins = parseMinutes(s.time);
+
+    // remember where we are, for "Continue cooking" on the home screen
+    store.set('resume', { hash: location.hash, dish: rc.dish.name, step: idx, total, at: Date.now() });
 
     setPage(`
       <div class="cook">
         <header class="cook-head">
           <a class="iconbtn" href="${recipeHref}" aria-label="Leave cooking mode">${ICON.close}</a>
           <div class="cook-count">Step ${idx + 1} of ${total}</div>
-          <span class="iconbtn ghost"></span>
+          <button class="iconbtn" id="peek" aria-label="Show all ingredients">${ICON.list}</button>
         </header>
         <div class="progress" aria-hidden="true"><span style="width:${pct}%"></span></div>
         <main class="cook-body">
@@ -569,12 +721,29 @@
           <p class="cook-text">${s.html}</p>
           ${s.list ? miniList(s.list) : ''}
           ${chips(s)}
-          ${voice.supported ? `<button class="btn secondary read" id="read">${ICON.speaker}<span>Read aloud</span></button>` : ''}
+          <div class="cook-actions">
+            ${voice.supported ? `<button class="btn secondary read" id="read">${ICON.speaker}<span>Read aloud</span></button>` : ''}
+            ${mins >= 1 ? `<button class="btn secondary" id="timer">${ICON.clock}<span>Start ${fmtMins(mins)} timer</span></button>` : ''}
+          </div>
         </main>
         <nav class="cook-nav">
           <button class="btn secondary" id="prev" ${idx === 0 ? 'disabled' : ''}>${ICON.back}<span>Back</span></button>
-          ${last ? `<a class="btn primary" href="${recipeHref}">Done</a>` : `<button class="btn primary" id="next"><span>Next</span>${ICON.next}</button>`}
+          ${last ? `<a class="btn primary" href="${recipeHref}" id="done">Done</a>` : `<button class="btn primary" id="next"><span>Next</span>${ICON.next}</button>`}
         </nav>
+      </div>
+      <div class="sheet" id="sheet" hidden>
+        <div class="sheet-panel" role="dialog" aria-modal="true" aria-label="All ingredients">
+          <div class="sheet-head">
+            <h2>All ingredients</h2>
+            <button class="iconbtn" id="sheet-x" aria-label="Close">${ICON.close}</button>
+          </div>
+          <p class="muted">${esc(rc.opts.serves + (rc.opts.serves === 1 ? ' person' : ' people'))}</p>
+          ${rc.sections.map((sec) => `
+            <section class="group">
+              <h3>${esc(sec.name)}</h3>
+              <ul class="ings">${sec.items.map((i) => `<li><span class="amt">${esc(amountText(i.a))}</span> <span>${esc(ingName(i, i.a))}${i.note ? `<span class="muted">, ${esc(i.note)}</span>` : ''}</span></li>`).join('')}</ul>
+            </section>`).join('')}
+        </div>
       </div>
     `, rc.dish.name);
 
@@ -589,12 +758,20 @@
       readBtn.innerHTML = on ? `${ICON.stop}<span>Stop</span>` : `${ICON.speaker}<span>Read aloud</span>`;
       readBtn.classList.toggle('on', on);
     };
+    const sheet = document.getElementById('sheet');
     app.onclick = (e) => {
+      if (e.target === sheet || e.target.closest('#sheet-x')) { sheet.hidden = true; return; }
+      if (e.target.closest('#done')) { store.set('resume', null); return; }
       const b = e.target.closest('button');
       if (!b) return;
       if (b.id === 'prev') go(idx - 1);
       else if (b.id === 'next') go(idx + 1);
-      else if (b.id === 'read') {
+      else if (b.id === 'peek') sheet.hidden = false;
+      else if (b.id === 'timer') {
+        timers.add('Step ' + (idx + 1) + ', ' + rc.dish.name, mins);
+        b.innerHTML = `${ICON.check}<span>Timer started</span>`;
+        b.disabled = true;
+      } else if (b.id === 'read') {
         if (b.classList.contains('on')) { voice.stop(); setReading(false); return; }
         let text = 'Step ' + (idx + 1) + '. ' + s.plain;
         if (s.list) text += ' ' + s.list.map((i) => i.text).join(', ') + '.';
@@ -605,17 +782,28 @@
       }
     };
   }
+  function fmtMins(m) {
+    if (m >= 60) { const h = Math.floor(m / 60), r = m % 60; return h + ' hr' + (r ? ' ' + r + ' min' : ''); }
+    return Math.round(m) + ' min';
+  }
 
   // keyboard arrows in cook mode (handy on a laptop)
   document.addEventListener('keydown', (e) => {
     if (route().view !== 'cook') return;
     if (e.key === 'ArrowRight') { const n = document.getElementById('next'); if (n) n.click(); }
+    if (e.key === 'Escape') { const sh = document.getElementById('sheet'); if (sh) sh.hidden = true; }
     if (e.key === 'ArrowLeft') { const p = document.getElementById('prev'); if (p && !p.disabled) p.click(); }
   });
 
   window.addEventListener('hashchange', () => { app.onclick = null; app.onchange = null; render(); });
   render();
+  timers.draw();
+
+  // Offline support: cache the app after the first visit
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
+  }
 
   // expose for testing
-  window.__kitchen = { build, search, tidy, fmtNum, scaleAmount };
+  window.__kitchen = { build, search, tidy, fmtNum, scaleAmount, parseMinutes };
 })();
